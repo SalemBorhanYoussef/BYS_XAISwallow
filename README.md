@@ -45,10 +45,7 @@ python -m pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-Environment konfigurieren (optional .env):
-```powershell
-copy .env.example .env   # passe SECRET_KEY & Pfade ggf. an
-```
+
 
 Model/Gewichte (Beispiel):
 ```
@@ -78,7 +75,6 @@ Training UI: http://localhost:5000/train/
 ## Konfiguration (ENV Variablen)
 | Variable      | Beschreibung | Default |
 |---------------|--------------|---------|
-| SECRET_KEY    | Flask Session Secret | dev / .env |
 | MODEL_DIR     | Ablage Modelle       | ./BYS_XAISwallow/models |
 | UPLOAD_DIR    | Uploads              | ./BYS_XAISwallow/uploads |
 | OUTPUT_DIR    | Exporte              | ./BYS_XAISwallow/outputs |
@@ -96,25 +92,9 @@ Training UI: http://localhost:5000/train/
 - Preprocess Blueprint: `/preprocess/...`
  - Training Blueprint: `/train` (Seite), `/train/api/start|stop|status|logs`
 
-## Entwicklung
-Empfohlene Tools (optional hinzuzufügen):
-```
-ruff  # Lint + Format
-black # Format (falls gewünscht)
-pytest
-mypy  # Typprüfung
-```
-
-Tests (Beispiel) kannst du unter `tests/` anlegen. Siehe `scripts/cleanup_large_files.py` für Repostrukturpflege.
-
 ## Datenschutz / Anonymisierung
 Die Ellipse-Maske kann dynamisch aktiviert werden (Modus `live` oder `static`). Für strikte Anforderungen kann beim Start `FACE_MASK_MODE=live` erzwungen oder UI deaktiviert werden.
 
-## Nächste Schritte / Roadmap
-- CLI für Batch-Inferenz
-- GitHub Actions CI (Lint + Unit Tests)
-- Git LFS für große Gewichte & Beispielvideos
-- Pre-Commit Hooks (ruff, black)
 
 ## Lizenz
 Siehe `LICENSE`.
