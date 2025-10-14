@@ -1,6 +1,59 @@
+############################
+# Data (keep READMEs only) #
+############################
+data/raw/*
 data/interim/*
 data/processed/*
-data/raw/*
+!data/raw/README.md
 !data/interim/README.md
 !data/processed/README.md
-!data/raw/README.md
+
+############################
+# Runtime artefacts         #
+############################
+BYS_XAISwallow/uploads/
+BYS_XAISwallow/outputs/
+__pycache__/
+*.py[cod]
+*.log
+*.tmp
+
+############################
+# Models & weights          #
+############################
+BYS_XAISwallow/models/*
+!BYS_XAISwallow/models/*.keep
+*.pth
+*.pt
+
+############################
+# Large media               #
+############################
+*.mp4
+*.ravi
+
+############################
+# Environments              #
+############################
+.env
+.env.*
+venv/
+.venv/
+env/
+
+############################
+# Jupyter                   #
+############################
+.ipynb_checkpoints/
+
+############################
+# IDE / Editors             #
+############################
+.idea/
+.vscode/
+
+############################
+# OS                        #
+############################
+.DS_Store
+Thumbs.db

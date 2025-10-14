@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>Swallow Live Detection</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <h2>Swallow Detection – Live (Pfad & Upload)</h2>
+  <p>
+    <a href="/preprocess/">➡️ Preprocessing</a>
+    &nbsp;•&nbsp;
+    <a href="/train/">➡️ Zum Training</a>
+  </p>
+  <p class="muted">1) Modell laden → 2) Video wählen (Pfad oder Upload) → 3) Start → Live Prediction & Seek.</p>
+
+  <div class="row">
+    <div class="card">
+      <h3>1) Modell laden</h3>
+      <label>Checkpoint (.pth):
+        <input id="ckpt" type="text" size="46" value="./models/slowfastHub_ws32_e20.pth" />
+      </label>
+      <div class="grid-2" style="margin-top:12px;">
+        <label>Modell
+          <select id="modelType">
+            <option value="hub">hub (slowfast_r50)</option>
+            <option value="simple">simple (2D)</option>
+          </select>
+        </label>
+        <label>fps
+          <input id="fps" type="number" value="32" step="0.01">
+        </label>
+        <label>t_fast
+          <input id="tfast" type="number" value="32">
+        </label>
+        <label>alpha
+          <input id="alpha" type="number" value="4">
+        </label>
+        <label>Fenstergröße
+          <input id="winsz" type="number" value="32">
+        </label>
+        <label>Stride (Test)
+          <input id="stride" type="number" value="1">
+        </label>
+        <label>Resize H
+          <input id="rh" type="number" value="160">
+        </label>
+        <label>Resize W
+          <input id="rw" type="number" value="160">
+        </label>
+      </div>
+      <hr />
+      <h4>YOLO/ROI & Datenschutz</h4>
+      <div class="grid-2">
+        <label>YOLO Pose Gewichte
+          <input id="yoloWeights" type="text" value="yolov8n-pose.pt">
+        </label>
+        <label>Konfidenz (0–1)
+          <input id="yoloConf" type="number" step="0.01" value="0.25">
+        </label>
+        <label>ROI-Größe (px)
+          <input id="roiSize" type="number" value="244">
+        </label>
+        <label>ROI-Modus
+          <select id="roiMode">
+            <option value="live_pose">live_pose</option>
+            <option value="first_frame_pose" selected>first_frame_pose</option>
+            <option value="manual">manual</option>
+          </select>
+        </label>
+        <label id="fixedXYWrap" title="Nur bei ROI-Modus „manuell“ relevant.">
+          X <input id="fixedX" type="number" value="0" style="width:90px">
+          Y <input id="fixedY" type="number" value="0" style="width:90px">
+        </label>
+        <label>Face-Mask Modus
+          <select id="faceMaskMode">
+            <option value="live">live</option>
+            <option value="static">static</option>
+            <option value="off">off</option>
+          </select>
+        </label>
+        <label class="checkbox">
+          <input id="yoloOverlay" type="checkbox" checked>
+          YOLO Overlay (Anzeige)
+        </label>
+      </div>
+      <div style="margin-top:10px;">
+        <button id="btnLoad" class="btn-primary">Modell laden</button>
+        <span id="loadStatus" class="muted"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Path (33%) left, Live + Prediction (66%) right stacked -->
+  <br>
+  <div class="row" style="display:grid; grid-template-columns: 1fr 2fr; gap:16px; align-items:start;">
+    <div class="card" id="videoPathCard">
+      <h3>2) Video-Pfad</h3>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <input id="pathInput" type="text" placeholder="Absoluter Pfad (.ravi / .mp4)" style="flex:1; padding:6px; border-radius:8px; border:1px solid var(--border); background:#fff; color:var(--text);" />
+        <button id="btnBrowseLive" class="btn" type="button" title="Server-Dateisystem durchsuchen">Browse</button>
+        <button id="btnAnalyze" class="btn" type="button">Analysieren</button>
+        <button id="btnStartStream" class="btn-primary" type="button" disabled>Stream Start</button>
+      </div>
+      <div id="fileInfoLive" class="muted" style="margin-top:6px; min-height:18px;"></div>
+      <div id="browserPanelLive" style="display:none; margin-top:10px; border:1px solid var(--border); padding:8px; border-radius:10px; max-height:260px; overflow:auto; background:#fff;">
+        <div style="display:flex; gap:6px; margin-bottom:6px; align-items:center;">
+          <strong style="flex:1; font-size:.8rem;" id="brCurLive">/</strong>
+          <button class="btn" id="brUpLive" type="button" style="padding:4px 8px;">..</button>
+          <input id="brFilterLive" type="text" placeholder="Filter" style="padding:4px 6px; width:120px; border-radius:6px; border:1px solid var(--border); background:#fff; color:var(--text); font-size:.75rem;" />
+        </div>
+        <ul id="brListLive" style="list-style:none; margin:0; padding:0; font-size:.78rem; line-height:1.3;"></ul>
+      </div>
+      <div id="videoMeta" class="muted" style="margin-top:12px; display:grid; grid-template-columns:repeat(3,auto); gap:12px;">
+        <div>FPS: <span id="metaFps">-</span></div>
+        <div>Frames: <span id="metaFrames">-</span></div>
+        <div>Dauer: <span id="metaDur">-</span>s</div>
+      </div>
+      <div id="firstFrameSection" style="margin-top:14px; display:none;">
+        <h4 style="margin:4px 0 6px;">Erstes Frame & Bearbeitung</h4>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:8px 0;">
+          <strong class="muted">ROI & Ellipse Bearbeiten</strong>
+          <label style="display:inline-flex; align-items:center; gap:4px;">
+            <input type="radio" name="ffEditMode" value="roi" checked> ROI
+          </label>
+          <label style="display:inline-flex; align-items:center; gap:4px;">
+            <input type="radio" name="ffEditMode" value="ellipse"> Ellipse
+          </label>
+          <button id="btnEllipseClearFF" type="button">Ellipse löschen</button>
+        </div>
+        <canvas id="firstFrameCanvas" width="0" height="0" style="max-width:100%; border:1px dashed var(--border); border-radius:10px; background:#000; display:block; margin-bottom:6px;"></canvas>
+        <small class="muted" style="display:block;">Interaktion: ROI: Klick = Zentrum. Ellipse: Drag Zentrum • Shift+Wheel=Rot • Wheel=Skalieren • Ctrl/Alt=Achsen.</small>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>Live-Video</h3>
+        <img id="video" src="/video_feed" alt="video stream" />
+        <small class="muted">Links: Original (optional YOLO & Face-Mask) • Rechts: ROI</small>
+      </div>
+
+      <div class="card" style="margin-top:16px;">
+        <h3>Prediction</h3>
+        <div class="controls">
+          <button id="btnPlay">Play</button>
+          <button id="btnPause">Pause</button>
+          <button id="btnRestart">Restart</button>
+          <span id="timeLabel" class="muted"></span>
+        </div>
+        <input id="seek" type="range" min="0" max="0" step="0.04" value="0" />
+        <canvas id="chart"></canvas>
+        <div id="lastVal" class="muted"></div>
+        <div class="muted" style="margin-top:6px;">Seek ruft serverseitig Fensterinferenzen ab (stride-basiert).</div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1"></script>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script>
+    // Video-Pfad + First-Frame Analyse & Start with ROI/Ellipse editing on first frame
+    (function(){
+      const pathInput=document.getElementById('pathInput');
+      const btnBrowseLive=document.getElementById('btnBrowseLive');
+      const btnAnalyze=document.getElementById('btnAnalyze');
+      const btnStart=document.getElementById('btnStartStream');
+      const panel=document.getElementById('browserPanelLive');
+      const brCur=document.getElementById('brCurLive');
+      const brList=document.getElementById('brListLive');
+      const brUp=document.getElementById('brUpLive');
+      const brFilter=document.getElementById('brFilterLive');
+      const fileInfo=document.getElementById('fileInfoLive');
+      const firstFrameSection=document.getElementById('firstFrameSection');
+      const ffCanvas=document.getElementById('firstFrameCanvas');
+      const ffCtx=ffCanvas.getContext('2d');
+      const FACE_RATIO=1.41;
+      let ffImg=null; let ffMeta=null; let ffROI={cx:-1,cy:-1}; let ffEllipse=null; let ffEditMode='roi';
+
+      // Edit controls
+      document.querySelectorAll('input[name="ffEditMode"]').forEach(r=>r.addEventListener('change',e=>{ ffEditMode=e.target.value; }));
+      const btnEllipseClearFF=document.getElementById('btnEllipseClearFF');
+      if(btnEllipseClearFF){ btnEllipseClearFF.addEventListener('click',()=>{ ffEllipse=null; drawFirst(); }); }
+
+      function drawFirst(){
+        if(!ffImg) return;
+        ffCanvas.width=ffImg.naturalWidth; ffCanvas.height=ffImg.naturalHeight;
+        ffCtx.clearRect(0,0,ffCanvas.width,ffCanvas.height);
+        ffCtx.drawImage(ffImg,0,0);
+        if(ffEllipse){
+          const [cx,cy]=ffEllipse.center; const [ax1,ax2]=ffEllipse.axes; const ang=ffEllipse.angle*Math.PI/180;
+          ffCtx.save(); ffCtx.translate(cx,cy); ffCtx.rotate(ang);
+          ffCtx.strokeStyle='#ff33ff'; ffCtx.lineWidth=2; ffCtx.beginPath(); ffCtx.ellipse(0,0,ax1,ax2,0,0,Math.PI*2); ffCtx.stroke(); ffCtx.restore();
+        }
+        if(ffROI.cx>=0){
+          const s=160; const half=s/2;
+          ffCtx.strokeStyle='#33aaff'; ffCtx.setLineDash([6,4]); ffCtx.strokeRect(ffROI.cx-half, ffROI.cy-half, s, s);
+          ffCtx.setLineDash([]);
+          ffCtx.fillStyle='#00ff88'; ffCtx.beginPath(); ffCtx.arc(ffROI.cx,ffROI.cy,5,0,Math.PI*2); ffCtx.fill();
+        }
+      }
+
+      function canvasPoint(ev){
+        const rect=ffCanvas.getBoundingClientRect();
+        const scaleX=ffCanvas.width/rect.width;
+        const scaleY=ffCanvas.height/rect.height;
+        const x=(ev.clientX-rect.left)*scaleX;
+        const y=(ev.clientY-rect.top)*scaleY;
+        return {x:Math.round(x), y:Math.round(y)};
+      }
+
+      // First-frame interactions
+      ffCanvas.addEventListener('click',ev=>{
+        if(!ffImg || ffEditMode!=='roi') return;
+        const p=canvasPoint(ev);
+        ffROI={cx:p.x, cy:p.y};
+        drawFirst();
+      });
+      let draggingEllipse=false; let dragOff={dx:0,dy:0};
+      ffCanvas.addEventListener('mousedown',ev=>{
+        if(!ffImg || ffEditMode!=='ellipse') return;
+        const p=canvasPoint(ev);
+        if(!ffEllipse){ ffEllipse={center:[p.x,p.y], axes:[60, Math.round(60*FACE_RATIO)], angle:0}; drawFirst(); return; }
+        const [cx,cy]=ffEllipse.center; const [ax1,ax2]=ffEllipse.axes; const ang=ffEllipse.angle*Math.PI/180;
+        const dx=p.x-cx, dy=p.y-cy; const c=Math.cos(-ang), s=Math.sin(-ang);
+        const lx=dx*c - dy*s, ly=dx*s + dy*c;
+        const inside=(lx*lx)/(ax1*ax1)+(ly*ly)/(ax2*ax2) <=1;
+        if(inside){ draggingEllipse=true; dragOff.dx=p.x-cx; dragOff.dy=p.y-cy; }
+      });
+      window.addEventListener('mousemove',ev=>{
+        if(!draggingEllipse) return; const p=canvasPoint(ev);
+        ffEllipse.center=[Math.round(p.x-dragOff.dx), Math.round(p.y-dragOff.dy)];
+        drawFirst();
+      });
+      window.addEventListener('mouseup',()=>{ draggingEllipse=false; });
+      ffCanvas.addEventListener('wheel',ev=>{
+        if(ffEditMode!=='ellipse' || !ffEllipse) return; ev.preventDefault();
+        if(ev.shiftKey){ ffEllipse.angle=(ffEllipse.angle+(ev.deltaY<0?-5:5)+360)%360; }
+        else if(ev.ctrlKey){ ffEllipse.axes[0]=Math.max(5, ffEllipse.axes[0]+(ev.deltaY<0?5:-5)); ffEllipse.axes[1]=Math.round(ffEllipse.axes[0]*FACE_RATIO); }
+        else if(ev.altKey){ ffEllipse.axes[1]=Math.max(5, ffEllipse.axes[1]+(ev.deltaY<0?5:-5)); ffEllipse.axes[0]=Math.round(ffEllipse.axes[1]/FACE_RATIO); }
+        else { ffEllipse.axes[0]=Math.max(5, ffEllipse.axes[0]+(ev.deltaY<0?5:-5)); ffEllipse.axes[1]=Math.round(ffEllipse.axes[0]*FACE_RATIO); }
+        drawFirst();
+      }, {passive:false});
+
+      function analyzeAutoPoints(path){
+        return fetch('/preprocess/auto_point',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path, little_endian:true, yolo_weights:document.getElementById('yoloWeights').value.trim(), yolo_conf:parseFloat(document.getElementById('yoloConf').value)||0.25})})
+          .then(r=>r.json());
+      }
+
+      // Directory browser
+      function renderEntries(entries){
+        brList.innerHTML='';
+        const f=brFilter.value.trim().toLowerCase();
+        entries.forEach(ent=>{
+          if(f && !ent.name.toLowerCase().includes(f)) return;
+          const li=document.createElement('li');
+          li.style.cursor='pointer';
+          li.textContent=(ent.dir?'📁 ':'📄 ')+ent.name;
+          li.dataset.path=ent.path; li.dataset.dir=ent.dir;
+          li.addEventListener('click',()=>{ if(ent.dir){ loadDir(ent.path); } else { pathInput.value=ent.path; panel.style.display='none'; } });
+          brList.appendChild(li);
+        });
+      }
+      async function loadDir(p){
+        try{
+          const params=new URLSearchParams({path:p,ext:'.ravi,.mp4'});
+          const r=await fetch('/preprocess/browse?'+params.toString());
+          const j=await r.json();
+          if(!j.ok){ brCur.textContent='Fehler'; return; }
+          brCur.textContent=j.path; brCur.dataset.pathParent=j.parent; renderEntries(j.entries);
+        }catch(e){ brCur.textContent='Fehler'; }
+      }
+      if(btnBrowseLive){ btnBrowseLive.addEventListener('click',()=>{ panel.style.display = panel.style.display==='none' ? 'block':'none'; if(panel.style.display==='block'){ loadDir(pathInput.value.trim()||'.'); } }); }
+      if(brUp){ brUp.addEventListener('click',()=>{ loadDir(brCur.dataset.pathParent || brCur.textContent); }); }
+      if(brFilter){ brFilter.addEventListener('input',()=>{ loadDir(brCur.textContent); }); }
+
+      // Analyze first frame
+      if(btnAnalyze){
+        btnAnalyze.addEventListener('click', async ()=>{
+          const p=pathInput.value.trim(); if(!p){ fileInfo.textContent='Pfad fehlt'; return; }
+          fileInfo.textContent='Lese erstes Frame…'; btnAnalyze.disabled=true; btnStart.disabled=true;
+          try{
+            const r=await fetch('/preprocess/first_frame',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p,little_endian:true})});
+            const jf=await r.json();
+            if(!jf.ok){ fileInfo.textContent='Fehler: '+(jf.error||'first_frame'); btnAnalyze.disabled=false; return; }
+            ffMeta=jf.meta; ffImg=new Image();
+            ffImg.onload=()=>{
+              firstFrameSection.style.display='block'; fileInfo.textContent='Auto Pose…'; drawFirst();
+              analyzeAutoPoints(p).then(ap=>{
+                if(ap.ok){ if(ap.neck){ ffROI={cx:ap.neck.x, cy:ap.neck.y}; } if(ap.ellipse){ ffEllipse={center:ap.ellipse.center, axes:ap.ellipse.axes, angle:ap.ellipse.angle}; }
+                  drawFirst(); fileInfo.textContent='Bearbeite ROI / Ellipse & starte Stream.'; btnStart.disabled=false; }
+                else { fileInfo.textContent='Auto Pose Fehler: '+(ap.error||''); btnStart.disabled=false; }
+              }).catch(()=>{ fileInfo.textContent='Auto Pose Fehler'; btnStart.disabled=false; });
+            };
+            ffImg.src=jf.image;
+          }catch(e){ fileInfo.textContent='Netzfehler'; }
+          finally{ btnAnalyze.disabled=false; }
+        });
+      }
+
+      // Start streaming and push edits
+      if(btnStart){
+        btnStart.addEventListener('click', async ()=>{
+          const p=pathInput.value.trim(); if(!p){ fileInfo.textContent='Pfad fehlt'; return; }
+          fileInfo.textContent='Starte Stream…'; btnStart.disabled=true;
+          const r=await fetch('/use_path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})});
+          let j={}; try{ j=await r.json(); }catch(e){ fileInfo.textContent='Antwort ungültig'; btnStart.disabled=false; return; }
+          if(!j.ok){ fileInfo.textContent='Fehler: '+(j.error||'start'); btnStart.disabled=false; return; }
+          setTimeout(()=>{
+            if(ffROI.cx>=0){ fetch('/edit/roi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({x:ffROI.cx,y:ffROI.cy})}); }
+            if(ffEllipse){ fetch('/edit/ellipse',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({center:ffEllipse.center, axes:ffEllipse.axes, angle:ffEllipse.angle})}); }
+          },400);
+          fileInfo.textContent='Stream läuft';
+          setTimeout(async()=>{ const m=await fetch('/video_meta'); if(m.ok){ const mj=await m.json(); if(mj.fps!==undefined){ document.getElementById('metaFps').textContent=mj.fps.toFixed(3); document.getElementById('metaFrames').textContent=mj.frames; document.getElementById('metaDur').textContent=mj.duration.toFixed(2); } } }, 800);
+        });
+      }
+    })();
+  </script>
+  <script>
+    (function () {
+      const roiMode = document.getElementById('roiMode');
+      const fx = document.getElementById('fixedX');
+      const fy = document.getElementById('fixedY');
+      const wrap = document.getElementById('fixedXYWrap');
+      function toggleFixed() {
+        const man = roiMode.value === 'manual';
+        wrap.style.opacity = man ? '1' : '.4';
+        fx.disabled = fy.disabled = !man;
+      }
+      roiMode.addEventListener('change', toggleFixed);
+      toggleFixed();
+    })();
+  </script>
+</body>
+</html>

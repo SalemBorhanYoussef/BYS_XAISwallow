@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>Training</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <h2>Swallow – Training</h2>
+  <p class="muted">Starte dein Training als Hintergrundprozess. Du kannst Konfigurationen setzen, Logs live verfolgen und stoppen.</p>
+
+  <div class="row">
+    <div class="card">
+      <h3>Konfiguration</h3>
+      <div class="grid-2">
+        <label>Python
+          <input id="pyExe" type="text" value="{{ defaults.python }}">
+        </label>
+        <label>Script
+          <input id="script" type="text" value="{{ defaults.script }}">
+        </label>
+        <label>Arbeitsverzeichnis
+          <input id="workdir" type="text" value="{{ defaults.workdir }}">
+        </label>
+        <label>Modelltyp
+          <select id="modelType">
+            <option value="slowraft" selected>slowraft</option>
+            <option value="slowfast">slowfast</option>
+          </select>
+        </label>
+        <label>Dataset Train
+          <input id="dsTrain" type="text" value="./Dataset_all/Dataset_l">
+        </label>
+        <label>Dataset Test
+          <input id="dsTest" type="text" value="./Dataset_all/Dataset_l_test">
+        </label>
+        <label>Out Dir
+          <input id="outDir" type="text" value="./models/l/">
+        </label>
+        <label>Batch Size
+          <input id="batchSize" type="number" value="8">
+        </label>
+        <label>Epochs
+          <input id="epochs" type="number" value="30">
+        </label>
+        <label>LR
+          <input id="lr" type="number" step="0.00001" value="0.0001">
+        </label>
+        <label>Scheduler
+          <select id="scheduler">
+            <option value="cosine" selected>cosine</option>
+            <option value="plateau_val">plateau_val</option>
+            <option value="none">none</option>
+          </select>
+        </label>
+        <label>Use AMP
+          <select id="useAmp">
+            <option value="true" selected>true</option>
+            <option value="false">false</option>
+          </select>
+        </label>
+      </div>
+      <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+        <button id="btnStart" class="btn-primary">Start</button>
+        <button id="btnStop" class="btn">Stop</button>
+        <span id="status" class="muted"></span>
+      </div>
+    </div>
+
+    <div class="card" style="flex:1; min-width:340px;">
+      <h3>Logs</h3>
+      <pre id="logs" style="height:420px; overflow:auto; background:#0b0b0b; color:#d6ffd6; padding:10px; border-radius:10px;">(leer)</pre>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='train.js') }}"></script>
+</body>
+</html>

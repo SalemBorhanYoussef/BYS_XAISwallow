@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>Preprocessing (.ravi → Full & ROI)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <style>
+    .grid { display:grid; gap:12px; grid-template-columns: 1fr 1fr; align-items:start; }
+    .card { background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:14px; box-shadow:var(--shadow); }
+    canvas { max-width:100%; border:1px dashed var(--border); border-radius:10px; background:#fff; }
+    .muted { color:var(--muted); }
+    .btn { background:var(--primary); color:#fff; padding:8px 12px; border:1px solid var(--primary); border-radius:10px; cursor:pointer; }
+    .btn:hover { background:var(--primary-600); }
+    .btn:disabled { opacity:.55; cursor:not-allowed; }
+    label.inline { display:inline-flex; align-items:center; gap:6px; margin-right:10px; }
+    select#roiSize { padding:4px 6px; }
+    .links a { display:inline-block; margin-right:12px; }
+    fieldset { border:1px solid var(--border); border-radius:10px; padding:10px; margin-top:14px; background:linear-gradient(180deg,#fff,#f8f9fb); }
+    legend { font-size:.75rem; padding:0 6px; color:var(--muted); letter-spacing:.5px; text-transform:uppercase; }
+    .rowflex { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+  </style>
+</head>
+<body>
+  <h2>.ravi → Export (Full & ROI mit Auto-Neck & Mask)</h2>
+  <p class="muted">1) Datei hochladen ODER Pfad eintippen → 2) erstes Frame → 3) Neck: Auto (YOLO) oder Klick → 4) Maske optional → 5) Export</p>
+
+  <div>
+    <div class="card" style="width:100%;">
+      <h3>1) Datei-Pfad</h3>
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+  <input id="manualPath" type="text" placeholder="Absoluter Pfad (.ravi / .mp4)" style="flex:1; padding:6px; border-radius:8px; border:1px solid var(--border); background:#fff; color:var(--text);">
+        <button id="btnBrowse" class="btn" type="button" title="Server-Dateisystem durchsuchen">Browse</button>
+        <button id="btnUseManual" class="btn" type="button">Laden</button>
+      </div>
+      <div id="fileInfo" class="muted" style="margin-top:6px; min-height:18px;"></div>
+  <div id="browserPanel" style="display:none; margin-top:10px; border:1px solid var(--border); padding:8px; border-radius:10px; max-height:260px; overflow:auto; background:#fff;">
+        <div style="display:flex; gap:6px; margin-bottom:6px; align-items:center;">
+          <strong style="flex:1; font-size:.8rem;" id="brCur">/</strong>
+          <button class="btn" id="brUp" type="button" style="padding:4px 8px;">..</button>
+          <input id="brFilter" type="text" placeholder="Filter" style="padding:4px 6px; width:120px; border-radius:6px; border:1px solid var(--border); background:#fff; color:var(--text); font-size:.75rem;" />
+        </div>
+        <ul id="brList" style="list-style:none; margin:0; padding:0; font-size:.78rem; line-height:1.3;">
+        </ul>
+      </div>
+
+      <h3 style="margin-top:18px;">2) Erstes Frame</h3>
+      <div class="rowflex">
+        <label class="inline"><input id="little" type="checkbox" checked> little-endian</label>
+        <button id="btnFirst" class="btn" disabled>Erstes Frame laden</button>
+      </div>
+      <div id="meta" class="muted" style="margin-top:8px;"></div>
+
+  <fieldset style="margin-top:14px;">
+        <legend>Neck Auswahl</legend>
+        <div class="rowflex">
+          <label class="inline">
+            Modus
+            <select id="neckMode">
+              <option value="manual">manual (Klick)</option>
+              <option value="auto_yolo">auto_yolo</option>
+            </select>
+          </label>
+          <label class="inline">
+            YOLO Weights
+            <input id="yoloWeights" type="text" value="yolov8n-pose.pt" style="width:150px;">
+          </label>
+            <label class="inline">
+            Conf
+            <input id="yoloConf" type="number" step="0.01" value="0.25" style="width:80px;">
+          </label>
+          <button id="btnAuto" class="btn" disabled>Auto erkennen</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Maske (Ellipse)</legend>
+        <label class="inline" style="margin-bottom:4px;">
+          <input id="maskEnabled" type="checkbox"> Ellipse Maske aktiv (Auto falls erkannt, sonst manuell bearbeitbar)
+        </label>
+        <small class="muted" style="display:block; margin-top:4px; line-height:1.25;">
+          Bearbeitung: Modus "Edit: Ellipse" wählen → Drag = Zentrum • Mausrad = Skalieren • Shift+Wheel=Rot • Ctrl/Alt=Achsen.
+        </small>
+      </fieldset>
+    </div>
+    <div class="card" style="margin-top:18px;">
+      <h3>3) Vorschauen & Bearbeitung</h3>
+      <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start;">
+        <div style="flex:1; min-width:260px;">
+          <div style="font-size:.7rem; margin-bottom:4px;" class="muted">Original + Overlays</div>
+          <canvas id="cnv" width="0" height="0"></canvas>
+        </div>
+        <div style="flex:1; min-width:220px;">
+          <div style="font-size:.7rem; margin-bottom:4px;" class="muted">Maskierte Ansicht</div>
+          <canvas id="cnvMasked" width="0" height="0"></canvas>
+        </div>
+        <div style="flex:1; min-width:180px;">
+          <div style="font-size:.7rem; margin-bottom:4px;" class="muted">ROI Ausschnitt</div>
+          <canvas id="cnvRoi" width="0" height="0"></canvas>
+        </div>
+      </div>
+      <div class="muted" id="ptLabel" style="margin-top:6px;">Kein Punkt gewählt</div>
+      <div style="margin-top:8px; display:flex; flex-wrap:wrap; gap:16px; align-items:center; font-size:.75rem;">
+        <label class="inline" style="margin:0;">
+          <input type="radio" name="editMode" value="roi" checked> Edit: ROI
+        </label>
+        <label class="inline" style="margin:0;">
+          <input type="radio" name="editMode" value="ellipse"> Edit: Ellipse
+        </label>
+        <span class="muted" style="opacity:.8;">Nur ein Objekt gleichzeitig.</span>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:14px; flex-wrap:wrap; align-items:center;">
+        <label>ROI size
+          <select id="roiSize">
+            <option value="244" selected>244</option>
+            <option value="112">112</option>
+          </select>
+        </label>
+        <label class="inline" style="gap:4px;">
+          <input id="roiMaskShow" type="checkbox"> ROI Maske anzeigen
+        </label>
+        <label class="inline" style="gap:4px;">
+          <input id="roiMaskExport" type="checkbox"> ROI auch maskieren (Export)
+        </label>
+        <button id="btnExport" class="btn" disabled>4) Export starten</button>
+        <span id="status" class="muted"></span>
+      </div>
+      <div id="links" class="links" style="margin-top:12px;"></div>
+    </div>
+    <div id="exportPreview" class="card" style="margin-top:18px; display:none;">
+      <h3>5) Export Vorschau</h3>
+      <div class="rowflex">
+        <div style="flex:1; min-width:280px;">
+          <div class="muted" style="font-size:.7rem; margin-bottom:4px;">Full Video</div>
+          <video id="vidFull" controls preload="metadata" style="width:100%; max-height:360px; border:1px solid var(--border); border-radius:10px; background:#000; display:block;"></video>
+        </div>
+        <div style="flex:1; min-width:200px;">
+          <div class="muted" style="font-size:.7rem; margin-bottom:4px;">ROI Video</div>
+          <video id="vidRoi" controls preload="metadata" style="width:100%; max-height:360px; border:1px solid var(--border); border-radius:10px; background:#000; display:block;"></video>
+        </div>
+      </div>
+      <small class="muted" style="display:block; margin-top:8px;">Falls Zeit = 0: Cache leeren (Ctrl+F5) oder erneuten Export starten.</small>
+    </div>
+  </div>
+
+  <script src="{{ url_for('static', filename='preprocess.js') }}"></script>
+</body>
+</html>
