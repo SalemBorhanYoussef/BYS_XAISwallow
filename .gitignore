@@ -57,3 +57,4 @@ env/
 ############################
 .DS_Store
 Thumbs.db
+BYS_XAISwallow/runs/*

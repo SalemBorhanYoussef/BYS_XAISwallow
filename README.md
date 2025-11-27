@@ -50,7 +50,7 @@ pip install -r requirements.txt
 Model/Gewichte (Beispiel):
 ```
 models/
-    slowfastHub_ws32_e20.pth   # <- eigener Checkpoint (nicht im Repo)
+    slowfast_ws32_e5.pth       # Standard-Checkpoint (1-Logit SlowFast, nicht im Repo)
     yolov8n-pose.pt            # YOLO Pose (Ultralytics) – falls nicht automatisch geladen
 ```
 
@@ -72,28 +72,103 @@ Preprocessing UI: http://localhost:5000/preprocess/
 Training UI: http://localhost:5000/train/
 
 
-## Konfiguration (ENV Variablen)
-| Variable      | Beschreibung | Default |
-|---------------|--------------|---------|
-| MODEL_DIR     | Ablage Modelle       | ./BYS_XAISwallow/models |
-| UPLOAD_DIR    | Uploads              | ./BYS_XAISwallow/uploads |
-| OUTPUT_DIR    | Exporte              | ./BYS_XAISwallow/outputs |
-| DEVICE        | auto|cpu|cuda        | auto |
-| LOG_LEVEL     | INFO/DEBUG/...       | INFO |
+## Training & Evaluation (Scripts)
+Die wichtigsten Trainings-/Evaluationsskripte liegen unter `BYS_XAISwallow/code/`.
 
-## API Endpunkte (Kurz)
-- `POST /load_model` – JSON: { ckpt, model, tfast, alpha, ... , yolo_conf, roi_mode }
-- `POST /upload` – multipart video
-- `POST /use_path` – { path }
-- `POST /stop`
-- `GET  /video_feed` – MJPEG Stream
-- `GET  /video_meta` – { fps, frames, duration }
-- SocketIO: `control` (pause/play/seek/replay) + Events: `meta`, `pred`
-- Preprocess Blueprint: `/preprocess/...`
- - Training Blueprint: `/train` (Seite), `/train/api/start|stop|status|logs`
+Hinweis zu Parametern: Die Skripte unterstützen in der Regel `-h/--help` und akzeptieren Standardargumente wie `--mode`, `--dataset_dir`, `--epochs`, `--batch_size`, `--window_size`, `--train_stride`, `--resize_h/--resize_w`, etc. Prüfe die Hilfe deiner Branch/Version für die exakten Namen.
 
-## Datenschutz / Anonymisierung
-Die Ellipse-Maske kann dynamisch aktiviert werden (Modus `live` oder `static`). Für strikte Anforderungen kann beim Start `FACE_MASK_MODE=live` erzwungen oder UI deaktiviert werden.
+- SlowFast (binary): `code/train_slowfast.py`
+    - Zweck: Binäre Fensterklassifikation (1 Logit) mit PyTorchVideo SlowFast‑R50.
+    - Train
+        ```powershell
+        python .\BYS_XAISwallow\code\train_slowfast.py --mode train --dataset_dir .\TSwallowDataset \
+            --out_dir .\runs\slowfast --epochs 20
+        ```
+    - Test (alle Checkpoints in Ordner)
+        ```powershell
+        python .\BYS_XAISwallow\code\train_slowfast.py --mode test_all --ckpt_dir .\runs\slowfast\checkpoints
+        ```
+    - Test (einzelnes Video)
+        ```powershell
+        python .\BYS_XAISwallow\code\train_slowfast.py --mode test_single \
+            --ckpt .\BYS_XAISwallow\models\slowfast_ws32_e5.pth \
+            --video <pfad\zum\roi_video.mp4> --label <pfad\zum\elan.txt>
+        ```
+
+- SlowFast (multiclass): `code/train_slowfast_multiclass.py`
+    - Zweck: Mehrklassen‑Training (z. B. `no_event`, `liquid`, `semi-solid`, `solid`).
+    - Beispiel (Training)
+        ```powershell
+        python .\BYS_XAISwallow\code\train_slowfast_multiclass.py --mode train --dataset_dir .\TSwallowDataset \
+            --out_dir .\runs\slowfast_mc --epochs 20
+        ```
+    - Hinweise: Klassenliste ist konfigurierbar; Fensterlabel via Mehrheitsregel mit Event‑Priorität.
+
+- Optical Flow (baseline): `code/train_optflow.py`
+    - Zweck: Leichtgewichtiges 3D‑CNN auf vorberechnetem Optical Flow (Mag+Angle).
+    - Beispiel (Training mit vorberechnetem Flow)
+        ```powershell
+        python .\BYS_XAISwallow\code\train_optflow.py --mode train --dataset_dir .\TSwallowDataset \
+            --out_dir .\runs\optflow --use_precomputed_flow 1
+        ```
+    - Hinweis: Siehe Abschnitt „Optical Flow Precompute“ unten zur Erzeugung der Flow‑Dateien.
+
+- Dual Slow+Flow (leichtgewichtig): `code/train_dual_slowflow.py`
+    - Zweck: Zwei Pfade – RGB‑Slow (wenige Frames) + Optical‑Flow‑Pfad; frühe/late Fusion.
+    - Beispiel (Training)
+        ```powershell
+        python .\BYS_XAISwallow\code\train_dual_slowflow.py --mode train --dataset_dir .\TSwallowDataset \
+            --out_dir .\runs\dual_slowflow
+        ```
+
+Allgemeine Datensatzannahme: Für jedes ROI‑Video (`*.mp4/*.avi/...`) liegt im gleichen Ordner eine `.txt`‑Annotation (ELAN‑Export) mit Zeitintervallen und Labels.
+
+
+## Optical Flow Precompute (DIS)
+Skript: `code/precompute_optflow_dis.py`
+
+Features: DIS‑Flow, Ausgabe als HDF5 (`.h5`, quantisiert `int16` + `scale`) oder `.npz` (`float16`), Downscale, Fortschritt, Größenabschätzung.
+
+- Einzeldatei (Video oder Frame‑Ordner) → HDF5
+    ```powershell
+    python .\BYS_XAISwallow\code\precompute_optflow_dis.py --input <video_oder_frameordner> \
+        --output .\runs\optflow --backend h5 --dtype int16 --downscale 0.5
+    ```
+    Falls deine Branch keine CLI‑Flags unterstützt, öffne das Skript und passe `DEFAULT_CONFIG` direkt an.
+
+- Batch über Dataset‑Ordner (Python‑API)
+    ```python
+    from BYS_XAISwallow.code.precompute_optflow_dis import batch_precompute_from_dataset
+    batch_precompute_from_dataset("./TSwallowDataset", output_root="./runs/optflow")
+    ```
+
+HDF5‑Dateien enthalten `flow[T, H, W, 2]` (u,v) und ein Attribut `scale` für Dequantisierung.
+
+
+## Grad‑CAM Analyse (SlowFast)
+Skript: `code/analyze_gradcam_slowfast.py`
+
+Zweck: Visualisiert Grad‑CAM für Slow‑ und Fast‑Pfad auf einem explizit gewählten ROI‑Video (mit zugehöriger `.txt`‑Annotation). Optional werden, falls vorhanden, vorberechnete Optical‑Flow‑Dateien (`.h5/.npz`) mit den CAMs kombiniert und Metriken/Heatmaps exportiert.
+
+- Quickstart
+    1) Im Skript `AnalyzeConfig` anpassen (Pfad zum ROI‑Video und Annotation).
+    2) Starten:
+         ```powershell
+         python .\BYS_XAISwallow\code\analyze_gradcam_slowfast.py
+         ```
+    3) Alternativ programmgesteuert:
+         ```python
+         from BYS_XAISwallow.code.analyze_gradcam_slowfast import AnalyzeConfig, run_analysis
+         run_analysis(AnalyzeConfig(video_path="./path/to/roi.mp4", annotation_path="./path/to/elan.txt"))
+         ```
+
+Ausgaben: CAM‑Overlays (PNG/MP4), per‑Frame Heatmaps, optionale Flow‑Heatmaps/-CSV (masked/raw), Zeitreihenplots.
+
+
+## UI‑Integration (Kurz)
+- Training‑UI nutzt standardmäßig SlowFast (Script: `code/train_slowfast.py`).
+- Live‑Inferenz lädt ohne Angabe automatisch `models/slowfast_ws32_e5.pth` (falls vorhanden).
+- Live‑Pipeline: statisches ROI aus dem ersten Frame; optionale Ellipsenmaske und Anzeige nur der ROI‑Ansicht.
 
 
 ## Lizenz

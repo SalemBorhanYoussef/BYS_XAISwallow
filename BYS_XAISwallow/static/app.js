@@ -24,13 +24,45 @@
   // Socket
   const socket=io();
   socket.on('meta',m=>{meta=m; elMetaFps.textContent=m.fps.toFixed(3); elMetaFrames.textContent=m.frames; elMetaDur.textContent=m.duration.toFixed(2); elSeek.max=m.duration.toFixed(3); tuneSeekResolution();});
-  socket.on('pred',msg=>{ if(typeof msg.t==='number'&& typeof msg.p==='number'){ chartAddPoint(msg.t,msg.p,'live'); if(isPlaying){ elSeek.value=msg.t.toFixed(3); updateTimeLabel(); } elLastVal.textContent=`Letzte p = ${msg.p.toFixed(4)} @ t=${msg.t.toFixed(2)}s`; }});
+  socket.on('pred',msg=>{
+    if(typeof msg.t==='number' && typeof msg.p_smooth==='number'){
+      chartAddPoint(msg.t,msg.p_smooth,'live');
+      if(isPlaying){ elSeek.value=msg.t.toFixed(3); updateTimeLabel(); }
+      const gt = (msg.gt===0||msg.gt===1)? msg.gt : '-';
+      elLastVal.textContent = `t=${msg.t.toFixed(2)}s  p_raw=${(msg.p_raw||0).toFixed(3)}  p=${msg.p_smooth.toFixed(3)}  thr=${(msg.thresh||0).toFixed(2)}  event=${msg.event}  gt=${gt}`;
+    }
+  });
 
   function updateTimeLabel(){ const t=parseFloat(elSeek.value)||0; elTimeLabel.textContent=`t=${t.toFixed(2)}s`; }
   function tuneSeekResolution(){ const dur=meta.duration||0; let step=0.04; if(dur>600) step=0.2; else if(dur>300) step=0.1; else if(dur>120) step=0.05; elSeek.step=step.toFixed(3); }
 
   // Modell laden
-  elBtnLoad.addEventListener('click',async()=>{ elLoadStatus.textContent='Lade...'; const body={ ckpt:elCkpt.value.trim(),model_type:elModelType.value,fps:parseNum(elFps,32),t_fast:parseIntVal(elTfast,32),alpha:parseIntVal(elAlpha,4),window_size:parseIntVal(elWinsz,32),test_stride:parseIntVal(elStride,1),resize_h:parseIntVal(elRh,160),resize_w:parseIntVal(elRw,160),yolo_weights:elYoloWeights.value.trim(),yolo_conf:parseNum(elYoloConf,0.25),roi_size:parseIntVal(elRoiSize,160),roi_mode:elRoiMode.value,fixed_neck_xy:[parseIntVal(elFixedX,0),parseIntVal(elFixedY,0)],yolo_overlay:elYoloOverlay.checked,face_mask_mode:elFaceMaskMode.value}; const r=await fetch('/load_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}); const j=await r.json(); if(!j.ok){ elLoadStatus.textContent='Fehler: '+(j.error||r.status); return;} elLoadStatus.textContent='OK'; });
+  elBtnLoad.addEventListener('click',async()=>{
+    elLoadStatus.textContent='Lade...';
+    const body={
+      ckpt:elCkpt.value.trim(),
+      model:elModelType.value,
+      fps:parseNum(elFps,32),
+      t_fast:parseIntVal(elTfast,32),
+      alpha:parseIntVal(elAlpha,4),
+      window_size:parseIntVal(elWinsz,32),
+      test_stride:parseIntVal(elStride,8),
+      resize_h:244,
+      resize_w:244,
+      yolo_weights:elYoloWeights.value.trim(),
+      yolo_conf:parseNum(elYoloConf,0.25),
+      roi_size:244,
+      roi_mode:'first_frame_pose',
+      fixed_neck_xy:null,
+      yolo_overlay:false,
+      face_mask_mode:'off',
+      smooth_prob:7
+    };
+    const r=await fetch('/load_model',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const j=await r.json();
+    if(!j.ok){ elLoadStatus.textContent='Fehler: '+(j.error||r.status); return; }
+    elLoadStatus.textContent='OK';
+  });
 
   // Start per Pfad
   elBtnUsePath.addEventListener('click',async()=>{ const p=elPathInput.value.trim(); if(!p) return; if(!meta||!meta.fps){ /* no-op */ } isPlaying=true; const r=await fetch('/use_path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})}); let j=null; try{ j=await r.json(); }catch(e){ alert('Antwort kein JSON'); return; } if(!j.ok){ alert('Start fehlgeschlagen: '+(j.error||r.status)); return;} setTimeout(refreshMeta,500); });

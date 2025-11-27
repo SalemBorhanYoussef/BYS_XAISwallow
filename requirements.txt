@@ -12,3 +12,6 @@ matplotlib
 Pillow
 tensorboard
 pytorchvideo
+pandas
+h5py
+tqdm

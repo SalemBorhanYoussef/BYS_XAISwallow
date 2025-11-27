@@ -39,8 +39,8 @@ except Exception:
 class Config:
     # Video & Sampling
     fps: int = 32
-    resize_h: int = 224
-    resize_w: int = 224
+    resize_h: int = 244
+    resize_w: int = 244
     window_size: int = 32
 
     # SlowFast-Zeitachsen
@@ -49,13 +49,15 @@ class Config:
 
     # Inferenz
     threshold: float = 0.5
+    # Für Konsistenz mit Trainings-Skripten (eval cutoff)
+    pos_threshold_eval: float = 0.5
     use_amp: bool = True
     normalize: bool = False
     mean: Tuple[float, float, float] = (0.485, 0.456, 0.406)
     std: Tuple[float, float, float] = (0.229, 0.224, 0.225)
 
     # Modellwahl
-    model: str = "simple"          # "simple" oder "hub"
+    model: str = "hub"             # Standard: PyTorchVideo SlowFast R50
     slow_backbone: str = "resnet18"
     fast_backbone: str = "mobilenet_v3_small"
     pretrained_backbones: bool = True

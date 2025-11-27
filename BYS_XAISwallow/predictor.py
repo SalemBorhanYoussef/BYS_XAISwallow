@@ -39,6 +39,8 @@ class VideoPredictor(threading.Thread):
         yolo_overlay: bool = True,            # Skelett/Boxen zeichnen (links, Display)
         face_mask_mode: str = "live",         # live | static | off  (nur Display links)
         preset_face_ellipse: Optional[Any] = None,  # optional: vorgegebene Ellipse
+        smooth_prob: int = 5,                  # gleitender Mittelwert über letzte N Fenster
+        auto_threshold_csv: Optional[str] = None,  # Pfad zu test_metrics_summary.csv für best_thresh
     ):
         super().__init__(daemon=True)
         self.vpath = vpath
@@ -67,10 +69,31 @@ class VideoPredictor(threading.Thread):
         self.std = cfg.std
         self.use_amp = cfg.use_amp and (device.type == "cuda") and torch.cuda.is_available()
         self.stride = int(cfg.test_stride)
+        self.decision_threshold = float(getattr(cfg, "pos_threshold_eval", getattr(cfg, "threshold", 0.5)))
+        self._prob_hist = []  # einfache Liste; maxlen verwalten selbst
+        self._smooth_len = max(1, int(smooth_prob))
+        # Optional: Threshold aus CSV laden (Spalte best_thresh)
+        if auto_threshold_csv and auto_threshold_csv and auto_threshold_csv.endswith('.csv'):
+            try:
+                import csv
+                with open(auto_threshold_csv, 'r', encoding='utf-8') as f:
+                    reader = csv.DictReader(f)
+                    # nehme erste Zeile mit best_thresh
+                    for row in reader:
+                        bt = row.get('best_thresh')
+                        if bt is not None:
+                            self.decision_threshold = float(bt)
+                            break
+            except Exception:
+                pass
+        # Ground-truth flags (optional). Try to load .txt annotation matching video.
+        self.gt_flags = None
+        self._init_ground_truth()
 
         # ROI / YOLO
-        self.roi_size = int(roi_size)
-        self.roi_mode = str(roi_mode)
+        # Force static ROI behavior: use first frame pose, ignore live updates if requested
+        self.roi_size = 244  # fixed per requirement
+        self.roi_mode = "first_frame_pose"  # enforce static ROI selection
         self.fixed_neck_xy = tuple(fixed_neck_xy) if fixed_neck_xy else None
         self.yolo_overlay = bool(yolo_overlay)      # nur Anzeige links
         self.face_mask_mode = str(face_mask_mode)   # nur Anzeige links
@@ -100,6 +123,50 @@ class VideoPredictor(threading.Thread):
         # Optional: preset Face-Ellipse aus App-Optionen übernehmen
         if preset_face_ellipse is not None:
             self.static_face_ellipse = self._normalize_ellipse(preset_face_ellipse)
+        # Runtime editable overrides (user edits after first frame)
+        self.override_center: Optional[Tuple[int,int]] = None
+        self.override_face_ellipse = None  # same format as static_face_ellipse
+    def _init_ground_truth(self):
+        import os
+        txt_path = None
+        base, _ = os.path.splitext(self.vpath)
+        cand = base + ".txt"
+        if os.path.isfile(cand):
+            txt_path = cand
+        if txt_path is None:
+            self.gt_flags = None
+            return
+        # Simple ELAN-like parsing based on training scripts: columns with start/end seconds and label
+        flags = None
+        try:
+            # Build flags array length = n_frames (if available after metadata emission, fallback to cfg.window_size*10)
+            total_frames = max(1, int(self.n_frames) or int(self.cfg.window_size) * 10)
+            fps = float(self.fps_file) if self.fps_file else float(self.cfg.fps)
+            flags = np.zeros(total_frames, dtype=np.int32)
+            with open(txt_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    parts = line.strip().split('\t')
+                    if len(parts) < 9:
+                        continue
+                    try:
+                        start_s = float(parts[3])
+                        end_s = float(parts[5])
+                        label = parts[8].strip().lower()
+                    except Exception:
+                        continue
+                    if 'schluck' in label or 'swallow' in label or 'event' in label:
+                        s_f = int(round(start_s * fps))
+                        e_f = int(round(end_s * fps))
+                        if e_f < s_f:
+                            e_f = s_f
+                        s_f = max(0, s_f)
+                        e_f = min(total_frames - 1, e_f)
+                        flags[s_f:e_f+1] = 1
+            self.gt_flags = flags
+        except Exception:
+            self.gt_flags = None
 
     # ========== Public Helpers ==========
     def get_latest_jpeg(self) -> Optional[bytes]:
@@ -115,13 +182,16 @@ class VideoPredictor(threading.Thread):
 
     # ----- Live Edit APIs (called from Flask routes) -----
     def set_manual_center(self, x: int, y: int):
-        if self.roi_mode != "manual":
-            raise RuntimeError("ROI mode is not 'manual'")
-        self._manual_center_override = (int(x), int(y))
+        # Allow center override regardless of roi_mode (requirement: edited ROI should apply)
+        self.override_center = (int(x), int(y))
+        self._manual_center_override = self.override_center  # keep legacy name usages
 
     def set_static_face_ellipse(self, ellipse_params):
-        # Accept None or (center(x,y), axes(a,b), angle)
-        self.static_face_ellipse = self._normalize_ellipse(ellipse_params)
+        # Accept None or (center(x,y), axes(a,b), angle); treat as override after first frame
+        ell = self._normalize_ellipse(ellipse_params)
+        self.override_face_ellipse = ell
+        if self.static_face_ellipse is None:  # keep initial if not set yet
+            self.static_face_ellipse = ell
 
     def _normalize_ellipse(self, val):
         """Normalize ellipse input to ((cx,cy), (ax1,ax2), angle) or None.
@@ -235,20 +305,8 @@ class VideoPredictor(threading.Thread):
         return True, bgr
 
     def _need_yolo_this_frame(self) -> bool:
-        """
-        YOLO nur ausführen, wenn nötig – spart Rechenzeit.
-        - live_pose: ja
-        - Overlay links: ja
-        - face_mask_mode == live: ja
-        - first_frame_pose/static/off: nur im ersten Frame (via _process_first_frame_statics)
-        """
-        if self.roi_mode == "live_pose":
-            return True
-        if self.yolo_overlay:
-            return True
-        if self.face_mask_mode == "live":
-            return True
-        return False
+        # Only run YOLO for first frame to establish static ROI; afterwards skip
+        return self.frames_seen == 0
 
     def _ensure_yolo(self):
         if self._yolo is None:
@@ -355,40 +413,46 @@ class VideoPredictor(threading.Thread):
             face_ellipse = self.static_face_ellipse
 
         # 3) Linke Anzeige vorbereiten (Overlay & Maske erlaubt)
-        left = annotated_bgr.copy() if self.yolo_overlay else frame_bgr.copy()
-        if face_ellipse is not None:
-            apply_ellipse_mask_inplace(left, face_ellipse, fill=(0, 0, 0))  # nur Anzeige!
+        # For static ROI display only: no left original; we operate solely on ROI
 
         # 4) ROI-Zentrum bestimmen
-        if self.roi_mode == "live_pose":
-            neck_xy = estimate_neck_xy(kp, box) or (W // 2, int(H * 0.55))
+        # Center selection priority: user override > static box center > estimated neck > fallback
+        neck_xy = None
+        if self.override_center is not None:
+            neck_xy = self.override_center
+        elif self.static_neck_xy is not None:
+            neck_xy = self.static_neck_xy
+        elif box is not None and all(k in box for k in ("x1","y1","x2","y2")):
+            bx1, by1, bx2, by2 = box["x1"], box["y1"], box["x2"], box["y2"]
+            neck_xy = (int(round((bx1+bx2)/2)), int(round((by1+by2)/2)))
         else:
-            if self.roi_mode == "manual" and self._manual_center_override is not None:
-                neck_xy = self._manual_center_override
-            else:
-                neck_xy = self.static_neck_xy or (W // 2, int(H * 0.55))
+            neck_xy = (W // 2, int(H * 0.55))
+        self.static_neck_xy = self.static_neck_xy or neck_xy  # persist first resolved center
 
         # 5) **Clean ROI** aus dem ORIGINAL-FRAME ausschneiden (kein Overlay/keine Maske!)
         roi_bgr, (x1, y1, x2, y2) = crop_square(frame_bgr, neck_xy, self.roi_size)
+        # Apply ellipse mask if override/static ellipse available
+        ellipse_use = self.override_face_ellipse or self.static_face_ellipse
+        if ellipse_use is not None:
+            try:
+                (ecx, ecy), (ax1, ax2), angle = ellipse_use
+                rel_center = (int(ecx - x1), int(ecy - y1))
+                if 0 <= rel_center[0] < self.roi_size and 0 <= rel_center[1] < self.roi_size:
+                    # privacy: black inside ellipse, keep outside
+                    mask_full = np.zeros((self.roi_size, self.roi_size), np.uint8)
+                    cv2.ellipse(mask_full, rel_center, (int(ax1), int(ax2)), angle, 0, 360, 255, -1)
+                    mask_full = cv2.GaussianBlur(mask_full, (0,0), 2)
+                    inv = (mask_full > 0)
+                    roi_bgr[inv] = 0
+            except Exception:
+                pass
 
         # 6) Fürs Modell in RGB in den Fenster-Puffer legen
         roi_rgb = cv2.cvtColor(roi_bgr, cv2.COLOR_BGR2RGB)
         self.roi_rgb_buf.append(roi_rgb)
 
         # 7) Composite für die Anzeige bauen (links skaliertes Anzeige-Bild, rechts clean ROI)
-        left_s = cv2.resize(left, (640, int(640 * H / W)))
-        right_s = cv2.resize(roi_bgr, (640, left_s.shape[0]))
-
-        # ROI-Box nur zur Orientierung auf der linken Anzeige einzeichnen
-        scale = left_s.shape[1] / float(W)
-        cv2.rectangle(
-            left_s,
-            (int(x1 * scale), int(y1 * scale)),
-            (int(x2 * scale), int(y2 * scale)),
-            (0, 200, 255),
-            2,
-        )
-        comp = np.hstack([left_s, right_s])
+        comp = cv2.resize(roi_bgr, (640, 640))  # square display
 
         # 8) Prediction fensterweise (Sliding Window)
         prob = None
@@ -403,17 +467,34 @@ class VideoPredictor(threading.Thread):
         if prob is not None:
             center_idx = self.frames_seen - self.window_size // 2
             t_sec = center_idx / max(1.0, self.fps_file)
+            # Glättung
+            self._prob_hist.append(prob)
+            if len(self._prob_hist) > self._smooth_len:
+                self._prob_hist = self._prob_hist[-self._smooth_len:]
+            p_smooth = float(sum(self._prob_hist) / len(self._prob_hist))
+            event_flag = int(p_smooth >= self.decision_threshold)
+            gt_flag = None
+            if self.gt_flags is not None and 0 <= center_idx < len(self.gt_flags):
+                gt_flag = int(self.gt_flags[center_idx])
             self.socketio.emit(
                 "pred",
-                {"t": float(t_sec), "p": float(prob), "kind": ("seek" if seek_preview else "live")},
+                {
+                    "t": float(t_sec),
+                    "p_raw": float(prob),
+                    "p_smooth": p_smooth,
+                    "event": event_flag,
+                    "thresh": self.decision_threshold,
+                    "gt": gt_flag,
+                    "kind": ("seek" if seek_preview else "live"),
+                },
             )
             cv2.putText(
                 comp,
-                f"p={prob:.3f}",
+                f"p={p_smooth:.3f} thr={self.decision_threshold:.2f} gt={gt_flag if gt_flag is not None else '-'}",
                 (12, 28),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.9,
-                (0, 255, 255),
+                (0, 255, 0) if event_flag else (0, 255, 255),
                 2,
                 cv2.LINE_AA,
             )

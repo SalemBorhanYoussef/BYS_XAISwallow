@@ -68,6 +68,8 @@ def _stop_predictor():
 def index():
     return render_template("index.html", has_model=(model is not None))
 
+DEFAULT_CKPT = os.getenv("DEFAULT_CKPT", os.path.join(os.path.dirname(__file__), "models", "slowfast_ws32_e5.pth"))
+
 @app.route("/load_model", methods=["POST"])
 def load_model_route():
     global model, cfg, device, APP_OPTS
@@ -84,8 +86,12 @@ def load_model_route():
 
     # Normalize preset_face_ellipse structure (dict -> tuple) lazily later in predictor
 
+    # Auto-assign default checkpoint if none provided
     if not getattr(base, "ckpt", None):
-        return jsonify({"ok": False, "error": "ckpt path required"}), 400
+        if os.path.isfile(DEFAULT_CKPT):
+            base = replace(base, ckpt=DEFAULT_CKPT)
+        else:
+            return jsonify({"ok": False, "error": f"ckpt path required (default not found: {DEFAULT_CKPT})"}), 400
 
     cfg = base
     logger.info(f"[/load_model] ckpt={cfg.ckpt} model={cfg.model} "
